@@ -1,1 +1,1 @@
-# HavenSMP
+# Panel
