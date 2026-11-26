@@ -12,6 +12,7 @@ fail() { printf '\nERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$PANEL_DOMAIN" != "$WINGS_DOMAIN" ]] || fail "Panel and Wings need separate DNS names."
 [[ "$CONTACT_EMAIL" == *@*.* && "$ADMIN_EMAIL" == *@*.* ]] || fail "Invalid email address."
 [[ "$(printf '%s' "$ADMIN_PASSWORD" | wc -c)" -ge 12 ]] || fail "Admin password must contain at least 12 characters."
+[[ "$ADMIN_PASSWORD" =~ [A-Z] && "$ADMIN_PASSWORD" =~ [a-z] && "$ADMIN_PASSWORD" =~ [0-9] ]] || fail "Admin password must include uppercase, lowercase and numeric characters."
 
 . /etc/os-release
 [[ "$ID" == "ubuntu" && "$VERSION_ID" == "24.04" ]] || fail "Fresh Ubuntu 24.04 only."
