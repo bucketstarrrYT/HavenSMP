@@ -52,6 +52,7 @@ jobs:
           WINGS_DOMAIN: ${{ inputs.wings_domain }}
           CONTACT_EMAIL: ${{ inputs.contact_email }}
           ADMIN_EMAIL: ${{ inputs.admin_email }}
+          SSH_PORT: ${{ inputs.ssh_port }}
         run: |
           set -Eeuo pipefail
           [[ -n "$VPS_HOST" && -n "$VPS_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]] || {
