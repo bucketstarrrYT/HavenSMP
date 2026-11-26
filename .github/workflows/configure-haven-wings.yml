@@ -1,0 +1,78 @@
+name: Configure HavenSMP Wings
+
+on:
+  workflow_dispatch:
+    inputs:
+      ssh_port:
+        description: "VPS SSH port"
+        required: true
+        default: "22"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haven-pterodactyl-wings
+  cancel-in-progress: false
+
+jobs:
+  configure:
+    name: Apply generated node config and start Wings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Prepare SSH and validate the node configuration secret
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.HAVEN_VPS_HOST }}
+          VPS_USER: ${{ secrets.HAVEN_VPS_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.HAVEN_VPS_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.HAVEN_VPS_KNOWN_HOSTS }}
+          WINGS_CONFIG: ${{ secrets.HAVEN_WINGS_CONFIG }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$VPS_HOST" && -n "$VPS_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]] || {
+            echo "::error::VPS SSH secrets are missing."
+            exit 1
+          }
+          [[ -n "$WINGS_CONFIG" ]] || {
+            echo "::error::Add HAVEN_WINGS_CONFIG after creating the node in Panel."
+            exit 1
+          }
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/haven_vps_key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/haven_vps_key" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/haven_vps_key" >/dev/null
+          printf 'WINGS_CONFIG_B64=%q\n' "$(printf '%s' "$WINGS_CONFIG" | base64 -w0)" > "$RUNNER_TEMP/wings-env"
+
+      - name: Install node config and start Wings
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.HAVEN_VPS_HOST }}
+          VPS_USER: ${{ secrets.HAVEN_VPS_USER }}
+          SSH_PORT: ${{ inputs.ssh_port }}
+        run: |
+          set -Eeuo pipefail
+          [[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]] || { echo "::error::Invalid SSH port"; exit 1; }
+          {
+            cat "$RUNNER_TEMP/wings-env"
+            cat <<'REMOTE'
+          set -Eeuo pipefail
+          install -d -m 0700 /etc/pterodactyl
+          printf '%s' "$WINGS_CONFIG_B64" | base64 -d > /etc/pterodactyl/config.yml
+          chmod 0600 /etc/pterodactyl/config.yml
+          systemctl daemon-reload
+          systemctl enable --now wings
+          systemctl --no-pager --full status wings
+          REMOTE
+          } | ssh -T -p "$SSH_PORT" \
+              -i "$HOME/.ssh/haven_vps_key" \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$VPS_USER@$VPS_HOST" \
+              'if [ "$(id -u)" -eq 0 ]; then exec bash -s; else exec sudo -n bash -s; fi'
