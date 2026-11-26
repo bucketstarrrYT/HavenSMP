@@ -1,0 +1,102 @@
+name: Install HavenSMP Pterodactyl
+
+on:
+  workflow_dispatch:
+    inputs:
+      panel_domain:
+        description: "Panel DNS name (A record must point to your VPS)"
+        required: true
+        type: string
+      wings_domain:
+        description: "Wings DNS name (separate A record to the same VPS)"
+        required: true
+        type: string
+      contact_email:
+        description: "Email for Let's Encrypt certificate registration"
+        required: true
+        type: string
+      admin_email:
+        description: "Email for the DeepuRana administrator account"
+        required: true
+        type: string
+      ssh_port:
+        description: "VPS SSH port"
+        required: true
+        default: "22"
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: haven-pterodactyl-install
+  cancel-in-progress: false
+
+jobs:
+  install:
+    name: Install Panel, default Eggs, Docker and Wings
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout HavenSMP
+        uses: actions/checkout@v4
+
+      - name: Validate configuration and prepare SSH
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.HAVEN_VPS_HOST }}
+          VPS_USER: ${{ secrets.HAVEN_VPS_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.HAVEN_VPS_SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.HAVEN_VPS_KNOWN_HOSTS }}
+          PANEL_DOMAIN: ${{ inputs.panel_domain }}
+          WINGS_DOMAIN: ${{ inputs.wings_domain }}
+          CONTACT_EMAIL: ${{ inputs.contact_email }}
+          ADMIN_EMAIL: ${{ inputs.admin_email }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$VPS_HOST" && -n "$VPS_USER" && -n "$SSH_PRIVATE_KEY" && -n "$SSH_KNOWN_HOSTS" ]] || {
+            echo "::error::Add the four required VPS SSH secrets in repository Settings > Secrets and variables > Actions."
+            exit 1
+          }
+          [[ "$PANEL_DOMAIN" =~ ^([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$ ]] || { echo "::error::Invalid Panel DNS name"; exit 1; }
+          [[ "$WINGS_DOMAIN" =~ ^([A-Za-z0-9-]+\.)+[A-Za-z]{2,}$ ]] || { echo "::error::Invalid Wings DNS name"; exit 1; }
+          [[ "$PANEL_DOMAIN" != "$WINGS_DOMAIN" ]] || { echo "::error::Panel and Wings need different DNS names"; exit 1; }
+          [[ "$CONTACT_EMAIL" == *@*.* && "$ADMIN_EMAIL" == *@*.* ]] || { echo "::error::Enter valid email addresses"; exit 1; }
+          [[ "$SSH_PORT" =~ ^[0-9]{1,5}$ ]] || { echo "::error::Invalid SSH port"; exit 1; }
+          mkdir -p "$HOME/.ssh"
+          chmod 700 "$HOME/.ssh"
+          printf '%s\n' "$SSH_PRIVATE_KEY" > "$HOME/.ssh/haven_vps_key"
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > "$HOME/.ssh/known_hosts"
+          chmod 600 "$HOME/.ssh/haven_vps_key" "$HOME/.ssh/known_hosts"
+          ssh-keygen -y -f "$HOME/.ssh/haven_vps_key" >/dev/null
+          echo "SSH key and pinned host key are ready."
+
+      - name: Install Panel, eggs and Wings binary on the VPS
+        shell: bash
+        env:
+          VPS_HOST: ${{ secrets.HAVEN_VPS_HOST }}
+          VPS_USER: ${{ secrets.HAVEN_VPS_USER }}
+          ADMIN_PASSWORD: ${{ secrets.HAVEN_ADMIN_PASSWORD }}
+          PANEL_DOMAIN: ${{ inputs.panel_domain }}
+          WINGS_DOMAIN: ${{ inputs.wings_domain }}
+          CONTACT_EMAIL: ${{ inputs.contact_email }}
+          ADMIN_EMAIL: ${{ inputs.admin_email }}
+          SSH_PORT: ${{ inputs.ssh_port }}
+        run: |
+          set -Eeuo pipefail
+          [[ -n "$ADMIN_PASSWORD" ]] || { echo "::error::Add HAVEN_ADMIN_PASSWORD as a repository Actions secret."; exit 1; }
+          {
+            printf 'PANEL_DOMAIN=%q\n' "$PANEL_DOMAIN"
+            printf 'WINGS_DOMAIN=%q\n' "$WINGS_DOMAIN"
+            printf 'CONTACT_EMAIL=%q\n' "$CONTACT_EMAIL"
+            printf 'ADMIN_EMAIL=%q\n' "$ADMIN_EMAIL"
+            printf 'ADMIN_PASSWORD=%q\n' "$ADMIN_PASSWORD"
+            cat scripts/install-pterodactyl.sh
+          } | ssh -T -p "$SSH_PORT" \
+              -i "$HOME/.ssh/haven_vps_key" \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+              "$VPS_USER@$VPS_HOST" \
+              'if [ "$(id -u)" -eq 0 ]; then exec bash -s; else exec sudo -n bash -s; fi'
