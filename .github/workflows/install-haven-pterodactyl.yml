@@ -39,7 +39,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout HavenSMP
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Validate configuration and prepare SSH
         shell: bash
